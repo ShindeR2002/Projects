@@ -1,40 +1,75 @@
-import numpy as np
 import joblib
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
-from src.data_preprocessing import load_and_label_data, scale_data, gen_sequence, gen_labels
+
+from src.data_preprocessing import (
+    create_sequences,
+    load_and_label_data,
+    scale_data,
+    split_by_engine,
+)
 from src.model_training import build_lstm_model
 
+TRAIN_PATH = 'data/PM_train.csv'
+SCALER_PATH = 'scaler.pkl'
+MODEL_PATH = 'model.h5'
+SEQUENCE_LENGTH = 50
+VALIDATION_FRACTION = 0.10
+RANDOM_STATE = 42
+
+
 def main():
-    print("Step 1: Processing Training Data (Filtering Noisy Sensors)...")
-    df = load_and_label_data('data/PM_train.csv')
-    df, scaler = scale_data(df)
-    joblib.dump(scaler, 'scaler.pkl')
+    print('Step 1: Loading and labeling training telemetry...')
+    df = load_and_label_data(TRAIN_PATH)
 
-    print("Step 2: Reshaping for LSTM...")
-    sequence_length = 50
-    # Use only features with variance
-    sensor_cols = ['setting1', 'setting2', 'setting3', 'cycle_norm'] + \
-                  ['s2', 's3', 's4', 's7', 's8', 's9', 's11', 's12', 's13', 's14', 's15', 's17', 's20', 's21']
-    
-    seq_gen = (list(gen_sequence(df[df['id']==id], sequence_length, sensor_cols)) for id in df['id'].unique())
-    seq_array = np.concatenate(list(seq_gen)).astype(np.float32)
-    
-    label_gen = [gen_labels(df[df['id']==id], sequence_length, ['label_bc']) for id in df['id'].unique()]
-    label_array = np.concatenate(label_gen).astype(np.float32)
+    print('Step 2: Splitting complete engine lifecycles...')
+    train_df, validation_df = split_by_engine(
+        df,
+        validation_fraction=VALIDATION_FRACTION,
+        random_state=RANDOM_STATE,
+    )
 
-    print("Step 3: Training...")
-    model = build_lstm_model(seq_array, label_array)
-    
+    train_ids = sorted(train_df['id'].unique())
+    validation_ids = sorted(validation_df['id'].unique())
+    print(f'Train engines: {len(train_ids)}')
+    print(f'Validation engines: {len(validation_ids)}')
+    print(f'Engine overlap: {set(train_ids) & set(validation_ids)}')
+
+    print('Step 3: Fitting scaler on training engines only...')
+    train_df, scaler = scale_data(train_df, fit=True)
+    validation_df, _ = scale_data(validation_df, scaler=scaler, fit=False)
+    joblib.dump(scaler, SCALER_PATH)
+
+    print('Step 4: Creating temporal sequences...')
+    X_train, y_train = create_sequences(train_df, SEQUENCE_LENGTH)
+    X_val, y_val = create_sequences(validation_df, SEQUENCE_LENGTH)
+
+    print(f'Train sequences: {X_train.shape}')
+    print(f'Validation sequences: {X_val.shape}')
+
+    print('Step 5: Building LSTM...')
+    model = build_lstm_model(X_train, y_train)
+
     callbacks = [
-        ModelCheckpoint('model.h5', monitor='val_loss', save_best_only=True, mode='min'),
-        EarlyStopping(monitor='val_loss', patience=10, verbose=1),
-        ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5)
+        ModelCheckpoint(MODEL_PATH, monitor='val_loss', save_best_only=True, mode='min'),
+        EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=1),
+        ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1),
     ]
 
-    model.fit(seq_array, label_array, epochs=50, batch_size=200, 
-              validation_split=0.1, shuffle=True, verbose=1, callbacks=callbacks)
-    
-    print("Success: Training Complete.")
+    print('Step 6: Training with engine-level validation...')
+    model.fit(
+        X_train,
+        y_train,
+        validation_data=(X_val, y_val),
+        epochs=50,
+        batch_size=200,
+        shuffle=True,
+        verbose=1,
+        callbacks=callbacks,
+    )
 
-if __name__ == "__main__":
+    print(f'Success: model saved to {MODEL_PATH}')
+    print(f'Success: scaler saved to {SCALER_PATH}')
+
+
+if __name__ == '__main__':
     main()
