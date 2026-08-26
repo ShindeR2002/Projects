@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import joblib
 import mlflow
+from mlflow.tracking import MlflowClient
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 
 from src.data_preprocessing import (
@@ -17,10 +20,28 @@ SEQUENCE_LENGTH = 50
 VALIDATION_FRACTION = 0.10
 RANDOM_STATE = 42
 MLFLOW_EXPERIMENT = 'aircraft-engine-predictive-maintenance'
+MLFLOW_DB = 'sqlite:///mlflow.db'
+MLFLOW_ARTIFACT_DIR = Path('mlruns_sqlite').resolve()
+
+
+def configure_mlflow():
+    mlflow.set_tracking_uri(MLFLOW_DB)
+    client = MlflowClient()
+
+    experiment = client.get_experiment_by_name(MLFLOW_EXPERIMENT)
+    if experiment is None:
+        experiment_id = client.create_experiment(
+            MLFLOW_EXPERIMENT,
+            artifact_location=MLFLOW_ARTIFACT_DIR.as_uri(),
+        )
+    else:
+        experiment_id = experiment.experiment_id
+
+    mlflow.set_experiment(experiment_id=experiment_id)
 
 
 def main():
-    mlflow.set_experiment(MLFLOW_EXPERIMENT)
+    configure_mlflow()
 
     with mlflow.start_run() as run:
         mlflow.log_params({
@@ -107,6 +128,7 @@ def main():
         print(f'Best epoch: {best_epoch}')
         print(f'Best validation loss: {best_val_loss:.6f}')
         print(f'Best validation accuracy: {best_val_accuracy:.6f}')
+        print(f'MLflow tracking URI: {mlflow.get_tracking_uri()}')
         print(f'MLflow run ID: {run.info.run_id}')
         print(f'Success: model saved to {MODEL_PATH}')
         print(f'Success: scaler saved to {SCALER_PATH}')
