@@ -31,3 +31,34 @@ jobs:
       - name: Build Docker image
         run: |
           docker build -t aircraft-predictive-maintenance:ci .
+
+      - name: Start Docker container
+        run: |
+          docker run -d \
+            --name aircraft-pm-api \
+            -p 8000:8000 \
+            aircraft-predictive-maintenance:ci
+
+      - name: Wait for API
+        run: |
+          for i in {1..30}; do
+            if curl -fs http://127.0.0.1:8000/health; then
+              echo
+              echo "API is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "API failed to start"
+          docker logs aircraft-pm-api
+          exit 1
+
+      - name: Verify health endpoint
+        run: |
+          curl -fs http://127.0.0.1:8000/health
+
+      - name: Stop Docker container
+        if: always()
+        run: |
+          docker stop aircraft-pm-api || true
