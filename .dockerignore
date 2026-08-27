@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.github/
+mlruns/
+mlflow.db
+data/
+*.csv
+*.zip
+.vscode/
